@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <random>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -24,6 +26,7 @@
 #include "../src/runtime/replay.hpp"
 #include "../src/runtime/scheduler.hpp"
 #include "../src/runtime/streaming.hpp"
+#include "../src/runtime/work_steal.hpp"
 #include "../src/storage/cursor.hpp"
 
 using namespace aegis;
@@ -224,6 +227,79 @@ int main() {
         other.add_node("lonely", kernels::KernelClass::TRANSFORM, [] {});
         assert(runtime::graph_fingerprint(other) != recorded.graph);
         std::filesystem::remove(manifest_path);
+    }
+
+    // Work-stealing scheduler: same results as the level scheduler on
+    // randomized DAGs, dependency order respected, exceptions propagate,
+    // and the scheduler survives to run again after a throw.
+    {
+        runtime::StealingScheduler stealing(4);
+
+        // The same analytics pipeline produces identical output through it.
+        examples::AnalyticsPipeline steal_pipe(
+            col_view(static_cast<const double*>(prices.data()), prices.size()));
+        stealing.submit(steal_pipe.graph);
+        assert(steal_pipe.signal == analytics.signal);
+
+        // Randomized DAGs: node j depends on a random subset of earlier
+        // nodes and writes out[j] = 1 + sum(out[deps]); dependency-order
+        // execution is the only way to reproduce the sequential answer.
+        std::mt19937_64 rng(42);
+        for (int round = 0; round < 5; ++round) {
+            const size_t n = 200;
+            std::vector<double> out(n, 0.0), want(n, 0.0);
+            std::vector<std::vector<size_t>> deps(n);
+            runtime::TaskGraph dag;
+            for (size_t j = 0; j < n; ++j) {
+                for (size_t d = 0; d < j; ++d)
+                    if (rng() % 13 == 0) deps[j].push_back(d);
+                dag.add_node("n" + std::to_string(j),
+                             kernels::KernelClass::TRANSFORM,
+                             [j, &out, &deps] {
+                                 double s = 1.0;
+                                 for (size_t d : deps[j]) s += out[d];
+                                 out[j] = s;
+                             },
+                             /*required=*/j + 1 == n);
+                for (size_t d : deps[j]) dag.add_edge(d, j);
+            }
+            for (size_t j = 0; j < n; ++j) {  // sequential oracle
+                want[j] = 1.0;
+                for (size_t d : deps[j]) want[j] += want[d];
+            }
+            stealing.submit(dag);
+            assert(out == want);
+        }
+        assert(stealing.stats().graph_runs == 6);
+        assert(stealing.stats().local_pops + stealing.stats().steals ==
+               stealing.stats().tasks);
+
+        // A throwing node cancels the run, propagates, and leaves the
+        // scheduler reusable.
+        runtime::TaskGraph bad;
+        auto b0 = bad.add_node("boom", kernels::KernelClass::TRANSFORM,
+                               [] { throw std::runtime_error("boom"); });
+        auto b1 = bad.add_node("after", kernels::KernelClass::TRANSFORM, [] {},
+                               true);
+        bad.add_edge(b0, b1);
+        bool threw = false;
+        try {
+            stealing.submit(bad);
+        } catch (const std::runtime_error& e) {
+            threw = std::string(e.what()) == "boom";
+        }
+        assert(threw);
+        examples::AnalyticsPipeline again(
+            col_view(static_cast<const double*>(prices.data()), prices.size()));
+        stealing.submit(again.graph);
+        assert(again.signal == analytics.signal);
+
+        // Tracing works through the stealing scheduler too.
+        runtime::TraceRecorder steal_trace;
+        examples::AnalyticsPipeline traced2(
+            col_view(static_cast<const double*>(prices.data()), prices.size()));
+        stealing.submit(traced2.graph, &steal_trace);
+        assert(steal_trace.events().size() == 3);
     }
 
     // R3: seal + WAL commit + mmap cursor + range filtering and batching.
