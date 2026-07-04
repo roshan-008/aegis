@@ -19,6 +19,8 @@ command that exists in the repo. No aspirational entries.
 | [0003](0003-declined-optimizations.md) | 2026-07-04 | matmul intrinsics; client-side Nagle | compiler codegen / networking | **declined** — evidence said no |
 | [0004](0004-ring-false-sharing-null.md) | 2026-07-04 | Ring: cache-line padding + cached indices | concurrency / false sharing | **kept, null result** — payload-bound, not sync-bound |
 | [0005](0005-reverted-crc-length-guard.md) | 2026-07-04 | Added a header-length guard to `Segment::open` | virtual memory / trust boundary | **reverted** — the fuzz test disproved the hypothesis |
+| [0006](0006-work-stealing-scheduler.md) | 2026-07-05 | Work-stealing scheduler vs level barrier | work stealing / lost-wakeup races | **shipped**, 2.4–3.6× on skew, 22%→74% efficiency; one real deadlock found+fixed in bring-up |
+| [0007](0007-observability-replay-gate.md) | 2026-07-05 | Tracing + deterministic replay + bench gate | critical path / fingerprinting / perf regression | **shipped** — claims became executable checks |
 
 See [`../index.md`](../index.md) for the CS-concept → where-explored map.
 

@@ -309,6 +309,40 @@ dependency chain that the M1's FP units chew through, while the window-recompute
 loops respond differently to each target's `-march=native` and FP pipeline.
 Explaining that gap is a real systems answer, not a footnote.
 
+## Row 12 — Scheduler: level barrier vs work stealing (Apple M1, `bench_scheduler`)
+
+8 workers, 8 independent chains × 64 nodes, busy-spin node bodies; both
+schedulers run the **identical pre-generated graph** and their output
+checksums must match or the run is discarded (same oracle discipline as the
+kernels). An analytical model from the generated durations is printed next to
+the measurement: barrier bound = Σ per-level maxima, stealing bound = the
+heaviest chain (critical path).
+
+| durations | model barrier / critical path | level-barrier | work-stealing | speedup |
+|---|---|---:|---:|---:|
+| uniform 50 µs (control) | 3.2 / 3.2 ms | 8.31 ms | 4.83 ms | 1.72× |
+| skewed (1-in-8 nodes 20×) | 16.5 / 7.0 ms | 18.85 ms | 7.74 ms | **2.44×** |
+
+Traced skewed run (same graph through `TraceRecorder`):
+
+| scheduler | span | busy | pool efficiency | measured critical path |
+|---|---:|---:|---:|---:|
+| level-barrier | 18.73 ms | 33.06 ms | **22.1%** | 5.17 ms |
+| work-stealing | 6.05 ms | 35.81 ms | **74.0%** | 5.79 ms |
+
+- **The finding:** the skewed gap (2.44×) is the price of the per-level join —
+  the pool idles behind one straggler per level, exactly as the model
+  predicts (measured 18.85 vs modeled 16.5 ms; stealing 7.74 vs 7.0 ms).
+  The uniform control separates *barrier overhead* from *skew*: the model says
+  parity (3.2 = 3.2 ms) but level-barrier measures 8.31 ms — that surplus is
+  per-level packaged_task/future/join overhead (~80 µs/level), not skew.
+- **Noise caveat, stated up front:** speedup ratios on an unpinned desktop
+  vary run to run (uniform 0.93–1.72×, skewed 2.44–3.60× observed). The
+  regression gate therefore tracks only the skewed case, against a
+  conservative 2.4× floor; the uniform control is printed but not gated.
+- Full decision record incl. the lost-wakeup deadlock found during bring-up:
+  [engineering log 0006](docs/engineering_log/0006-work-stealing-scheduler.md).
+
 ## R1–R4 v3 hypothesis ledger → measurement status
 
 The rows written as hypotheses before measurement; now mostly closed on the M1

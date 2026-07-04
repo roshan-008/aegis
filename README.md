@@ -67,6 +67,7 @@ ledger with methodology and caveats: **[BENCHMARKS.md](BENCHMARKS.md)**.
 | CRC validation | 816 ms | **100 ms** | **8.2×** | bit-by-bit → slice-by-8 |
 | Arena alloc | ~22–95 ns | **~1.0 ns** | **~90×** | bump vs malloc |
 | Load 10M ticks | 3.5 M rows/s (CSV) | **340 M rows/s** (mmap) | **~96×** | zero-copy vs parse |
+| Skewed DAG (8×64 nodes) | 18.9 ms (level barrier) | **7.7 ms** (work stealing) | **2.4×** | barrier → dataflow dispatch |
 
 **Optimization progression** — the story each row tells (real measured steps):
 
@@ -127,6 +128,14 @@ change anything:
   and a live **Rust-TCP → C++-ring** integration test.
 - **ASan + UBSan** clean across the whole suite, including the Rust FFI, threads,
   mmap, and TCP paths.
+- **Deterministic replay:** runs record a manifest (graph fingerprint + FNV-1a
+  output checksums); re-execution must match bit-for-bit, and the test proves a
+  1e-9 input nudge is caught.
+- **Benchmark regression gate:** benches emit JSONL headline metrics;
+  `scripts/check_bench.py` hard-fails >25% regressions against
+  `results/baseline-apple-m1.jsonl` on the baseline host (advisory on CI).
+- **Execution tracing:** both schedulers emit Chrome/Perfetto trace JSON with
+  per-node spans, worker lanes, and a measured critical path.
 - **[CI](.github/workflows/ci.yml)** (Linux) runs build, tests, sanitizers (+ LSan),
   clang-tidy, clippy, and a benchmark smoke on every push.
 
@@ -136,13 +145,14 @@ change anything:
 src/        column · rolling(_fast) · simd · parallel · ring_buffer · mmap_table · span · expr
   mem/      arena · fixed_pool · alloc_counter
   kernels/  core (12 kernels) · registry (classed dispatch)
-  runtime/  context (ExecutionContext) · task_graph · optimizer · scheduler · worker_pool · streaming · observability
+  runtime/  context (ExecutionContext) · task_graph · optimizer · scheduler · work_steal · worker_pool · streaming · observability · trace (Chrome/Perfetto) · replay (run manifests)
   storage/  segment · reader · cursor · rust_bridge
   net/      feed · rust_server
 rust/       storage / CRC / WAL / mmap / recovery + aegis CLI + feed_server
 examples/   AnalyticsPipeline + MlpPipeline (same scheduler API)
 test/       test_rolling · test_fast · test_expr · test_runtime (+ Rust unit/fuzz)
-bench/      bench_{rolling,ring,streaming,parallel,mmap,kernels,mem,runtime,storage} + harness
+bench/      bench_{rolling,ring,streaming,parallel,mmap,kernels,mem,runtime,scheduler,storage} + harness
+scripts/    build · bench · check_bench.py (regression gate vs results/baseline-*.jsonl)
 docs/       engineering_log/ · index.md · references.md · cost_cards.md · BENCHMARKS · DESIGN · profiling
 ```
 
@@ -154,6 +164,7 @@ docs/       engineering_log/ · index.md · references.md · cost_cards.md · BE
 | R2 — DAG scheduler + optimizer + bounded streaming | ✅ shipped |
 | R3 — Rust WAL/segments + zero-copy mmap replay | ✅ shipped |
 | R4 — TCP feed + copy accounting + fusion + examples | ✅ shipped |
+| R5 — work-stealing scheduler, Chrome-trace observability, deterministic replay manifests, benchmark regression gate | ✅ shipped |
 | Linux/x86 pass — LSan leaks, `perf`/roofline, AVX2 vs NEON | ⏳ open (needs the CI host) |
 | Latency percentiles under thread pinning; kill-9 fault injection | ⏳ open |
 
