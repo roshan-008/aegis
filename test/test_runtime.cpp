@@ -21,6 +21,7 @@
 #include "../src/net/rust_server.hpp"
 #include "../src/runtime/context.hpp"
 #include "../src/runtime/optimizer.hpp"
+#include "../src/runtime/replay.hpp"
 #include "../src/runtime/scheduler.hpp"
 #include "../src/runtime/streaming.hpp"
 #include "../src/storage/cursor.hpp"
@@ -182,6 +183,47 @@ int main() {
         runtime::TraceRecorder empty;
         assert(empty.span_ns() == 0 && empty.busy_ns() == 0);
         assert(empty.critical_path(traced.graph).total_ns == 0);
+    }
+
+    // Deterministic replay: record a manifest, round-trip it through disk,
+    // re-execute the same pipeline over the same inputs, verify checksums
+    // bit-for-bit — then prove verify actually detects divergence.
+    {
+        auto run_once = [&](const std::vector<double>& px, const char* id) {
+            examples::AnalyticsPipeline p(
+                col_view(static_cast<const double*>(px.data()), px.size()));
+            const uint64_t ns = ctx.execute(p.graph);
+            runtime::RunManifest m;
+            m.run_id = id;
+            m.graph = runtime::graph_fingerprint(p.graph);
+            m.workers = scheduler.stats().tasks;  // recorded, never compared
+            m.wall_ns = ns;
+            m.add_output("ema", p.ema);
+            m.add_output("zscore", p.zscore);
+            m.add_output("signal", p.signal);
+            return m;
+        };
+        const auto manifest_path =
+            (std::filesystem::temp_directory_path() / "aegis-manifest-test.json").string();
+        const auto recorded = run_once(prices, "run-0001");
+        runtime::write_manifest(recorded, manifest_path);
+        const auto loaded = runtime::read_manifest(manifest_path);
+        assert(loaded.run_id == "run-0001" && loaded.graph == recorded.graph);
+        assert(loaded.outputs == recorded.outputs);
+
+        const auto replayed = run_once(prices, "run-0001-replay");
+        assert(runtime::verify_replay(loaded, replayed).ok());
+
+        std::vector<double> nudged = prices;
+        nudged[2] += 1e-9;  // one ULP-ish input drift must be caught
+        const auto diverged = runtime::verify_replay(loaded, run_once(nudged, "bad"));
+        assert(!diverged.ok() && !diverged.diverged.empty());
+        assert(diverged.graph_matches);  // same shape, different data
+
+        runtime::TaskGraph other;  // different shape → fingerprint mismatch
+        other.add_node("lonely", kernels::KernelClass::TRANSFORM, [] {});
+        assert(runtime::graph_fingerprint(other) != recorded.graph);
+        std::filesystem::remove(manifest_path);
     }
 
     // R3: seal + WAL commit + mmap cursor + range filtering and batching.
