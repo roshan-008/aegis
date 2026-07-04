@@ -140,7 +140,11 @@ inline void layernorm(ConstMatView x, MatView out, double eps = 1e-5) {
 inline void matmul(ConstMatView a, ConstMatView b, MatView out) {
     if (a.cols != b.rows || out.rows != a.rows || out.cols != b.cols)
         throw std::invalid_argument("matmul shape mismatch");
-    std::fill(out.ptr, out.ptr + out.rows * out.row_stride, 0.0);
+    // Zero row by row: a single fill over rows*row_stride would scribble on
+    // the gap columns of a strided (submatrix) output view.
+    for (size_t r = 0; r < out.rows; ++r)
+        std::fill(out.ptr + r * out.row_stride,
+                  out.ptr + r * out.row_stride + out.cols, 0.0);
     constexpr size_t BS = 32;
     for (size_t ii = 0; ii < a.rows; ii += BS)
         for (size_t kk = 0; kk < a.cols; kk += BS)

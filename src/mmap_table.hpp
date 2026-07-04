@@ -37,12 +37,14 @@ inline size_t save_table(const TickTable& t, const std::string& path) {
     const uint64_t n = t.size();
     FILE* f = std::fopen(path.c_str(), "wb");
     if (!f) throw std::runtime_error("save_table: cannot open " + path);
-    std::fwrite(kMagic, 1, 8, f);
-    std::fwrite(&n, sizeof n, 1, f);
-    std::fwrite(t.price.raw(), sizeof(double), n, f);
-    std::fwrite(t.volume.raw(), sizeof(double), n, f);
-    std::fwrite(t.ts_ns.raw(), sizeof(double), n, f);
-    std::fclose(f);
+    const bool ok = std::fwrite(kMagic, 1, 8, f) == 8 &&
+                    std::fwrite(&n, sizeof n, 1, f) == 1 &&
+                    std::fwrite(t.price.raw(), sizeof(double), n, f) == n &&
+                    std::fwrite(t.volume.raw(), sizeof(double), n, f) == n &&
+                    std::fwrite(t.ts_ns.raw(), sizeof(double), n, f) == n;
+    // fclose flushes; a full disk can surface only here, so its result counts.
+    if (std::fclose(f) != 0 || !ok)
+        throw std::runtime_error("save_table: short write to " + path);
     return kHeaderBytes + 3 * n * sizeof(double);
 }
 
@@ -62,8 +64,10 @@ public:
         if (bytes_ < kHeaderBytes || std::memcmp(p, kMagic, 8) != 0)
             throw std::runtime_error("MmapTable: bad magic");
         std::memcpy(&n_, p + 8, sizeof n_);
-        const size_t need = kHeaderBytes + 3 * n_ * sizeof(double);
-        if (bytes_ < need) throw std::runtime_error("MmapTable: truncated file");
+        // Divide instead of multiplying: 16 + 3*n*8 wraps for a corrupt huge n
+        // and would sail past the truncation check into OOB column views.
+        if (n_ > (bytes_ - kHeaderBytes) / (3 * sizeof(double)))
+            throw std::runtime_error("MmapTable: truncated file");
 
         const double* d = reinterpret_cast<const double*>(p + kHeaderBytes);
         price_ = Column::view(d, n_);

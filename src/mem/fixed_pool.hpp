@@ -19,6 +19,10 @@ public:
         for (size_t i = 0; i < Capacity; ++i)
             if (live_[i]) ptr(i)->~T();
     }
+    // Copying would byte-copy live objects without running T's copy
+    // constructor, then destroy "both" — pools are pinned in place.
+    FixedPool(const FixedPool&) = delete;
+    FixedPool& operator=(const FixedPool&) = delete;
 
     template <typename... Args>
     T* create(Args&&... args) {

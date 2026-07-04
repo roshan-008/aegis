@@ -81,6 +81,23 @@ int main() {
               return P[i] - m[i];
           }));
 
+    // malformed inputs must throw, not wrap or read out of bounds
+    auto expect_throw = [&](const char* src) {
+        try {
+            expr::evaluate(t, src);
+            std::printf("  FAIL %s: expected an exception\n", src);
+            ++failures;
+        } catch (const std::exception&) {
+            std::printf("  ok   %s throws\n", src);
+        }
+    };
+    expect_throw("mean(price,-1)");     // negative window: no (size_t) wrap
+    expect_throw("mean(price,2.5)");    // fractional window
+    expect_throw("vwap(price,volume,-3)");
+    expect_throw("mean(price)");        // wrong arity
+    expect_throw("nope(price,1)");      // unknown function
+    expect_throw("price + )");          // parse error
+
     if (failures) { std::printf("\n%d FAILED\n", failures); return 1; }
     std::puts("\nall expression tests passed");
     return 0;

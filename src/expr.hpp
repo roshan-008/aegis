@@ -219,6 +219,15 @@ private:
         return v.s;
     }
 
+    // window sizes must be non-negative integers before the size_t cast —
+    // (size_t)(-1.0) is formally UB and practically a 2^64 window
+    size_t window_arg(const Node& n) const {
+        const double v = num_arg(n);
+        if (!(v >= 0.0) || v != std::floor(v))
+            throw std::runtime_error("window must be a non-negative integer");
+        return static_cast<size_t>(v);
+    }
+
     Value from_vec(std::vector<double> v) const {
         Value r;
         r.scalar = false;
@@ -263,16 +272,14 @@ private:
             return column(n.kids[k]->name);
         };
         if (f == "mean" && n.kids.size() == 2)
-            return from_vec(fast::rolling_mean(col_of(0),
-                                               (size_t)num_arg(*n.kids[1])));
+            return from_vec(fast::rolling_mean(col_of(0), window_arg(*n.kids[1])));
         if (f == "std" && n.kids.size() == 2)
-            return from_vec(fast::rolling_std(col_of(0),
-                                              (size_t)num_arg(*n.kids[1])));
+            return from_vec(fast::rolling_std(col_of(0), window_arg(*n.kids[1])));
         if (f == "ema" && n.kids.size() == 2)
             return from_vec(naive::ema(col_of(0), num_arg(*n.kids[1])));
         if (f == "vwap" && n.kids.size() == 3)
             return from_vec(fast::rolling_vwap(col_of(0), col_of(1),
-                                               (size_t)num_arg(*n.kids[2])));
+                                               window_arg(*n.kids[2])));
         throw std::runtime_error("unknown function/arity: " + f);
     }
 
@@ -283,6 +290,8 @@ private:
             r.s = binop(op, a.s, b.s);
             return r;
         }
+        if (!a.scalar && !b.scalar && a.v.size() != b.v.size())
+            throw std::runtime_error("elementwise op on different-length vectors");
         const size_t n = a.scalar ? b.v.size() : a.v.size();
         std::vector<double> out(n);
         for (size_t i = 0; i < n; ++i) out[i] = binop(op, a.at(i), b.at(i));

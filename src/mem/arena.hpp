@@ -32,7 +32,9 @@ public:
         if (alignment == 0 || (alignment & (alignment - 1)) != 0)
             throw std::invalid_argument("arena alignment must be a power of two");
         const size_t aligned = round_up(offset_, alignment);
-        if (bytes > capacity_ - std::min(aligned, capacity_))
+        // aligned > capacity_ must fail even for bytes == 0: the returned
+        // pointer would already be past the buffer and used() > capacity().
+        if (aligned > capacity_ || bytes > capacity_ - aligned)
             throw std::bad_alloc();
         offset_ = aligned + bytes;
         high_water_ = std::max(high_water_, offset_);

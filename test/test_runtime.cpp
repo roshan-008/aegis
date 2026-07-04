@@ -67,6 +67,16 @@ int main() {
     pool.destroy(p0);
     assert(pool.create(Tick{3, 4, 5}));
 
+    // Arena invariant: an allocation whose alignment pushes past capacity must
+    // throw even for zero bytes — used() may never exceed capacity().
+    {
+        mem::Arena tiny(64);
+        tiny.allocate(60, 1);
+        bool threw = false;
+        try { tiny.allocate(0, 128); } catch (const std::bad_alloc&) { threw = true; }
+        assert(threw && tiny.used() <= tiny.capacity());
+    }
+
     // Registry dispatch and stable normalization/matrix oracle.
     assert(kernels::registry().size() == 12 && kernels::find("matmul"));
     std::vector<double> logits{1000, 1001, 1002, -1000, -999, -998};
@@ -84,6 +94,17 @@ int main() {
                           mat_view(static_cast<const double*>(mb.data()), 2, 2),
                           mat_view(mf.data(), 2, 2));
     assert(mn == mf && mn[0] == 19 && mn[3] == 50);
+
+    // matmul into a STRIDED submatrix view must not scribble on gap columns.
+    {
+        std::vector<double> big(4 * 4, -7.0);  // 4x4 parent, sentinel-filled
+        kernels::best::matmul(mat_view(static_cast<const double*>(ma.data()), 2, 2),
+                              mat_view(static_cast<const double*>(mb.data()), 2, 2),
+                              MatView{big.data(), 2, 2, 4});  // top-left 2x2
+        assert(big[0] == 19 && big[1] == 22 && big[4] == 43 && big[5] == 50);
+        assert(big[2] == -7.0 && big[3] == -7.0 && big[6] == -7.0);  // gap intact
+        for (size_t i = 8; i < 16; ++i) assert(big[i] == -7.0);      // rows 2-3 intact
+    }
 
     // R2/R4: DAG execution, dead-node elimination, pair fusion.
     std::vector<int> order;

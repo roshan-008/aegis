@@ -20,6 +20,7 @@ public:
         count_.fetch_add(1, std::memory_order_relaxed);
     }
     uint64_t percentile(double p) const {
+        if (count() == 0) return 0;  // no observations: 64 would be a lie
         const uint64_t target = static_cast<uint64_t>(count() * p);
         uint64_t seen = 0, ceiling = 64;
         for (const auto& b : buckets_) {
