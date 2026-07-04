@@ -1,0 +1,34 @@
+# Curated, not everything — a signal we can keep green, not a noise firehose.
+# Focus: real bug patterns, performance foot-guns, portability. Checks that
+# fight this codebase's deliberate choices are disabled with a reason.
+#
+# macOS note: Homebrew LLVM clang-tidy needs the SDK to parse the standard
+# library. Run with:  clang-tidy -p build FILE -- -isysroot $(xcrun --show-sdk-path)
+# In Linux CI the compile DB already carries the right sysroot.
+Checks: >
+  bugprone-*,
+  performance-*,
+  portability-*,
+  misc-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-random-generator-seed,
+  -bugprone-exception-escape,
+  -misc-no-recursion,
+  -misc-include-cleaner,
+  -misc-use-anonymous-namespace,
+  -misc-use-internal-linkage,
+  -misc-const-correctness,
+  -misc-non-private-member-variables-in-classes,
+  -performance-avoid-endl,
+  -portability-avoid-pragma-once
+WarningsAsErrors: ''
+HeaderFilterRegex: 'src/.*\.hpp$'
+FormatStyle: none
+# Disabled-with-reason:
+#   narrowing-conversions        — intentional FLOP-count / timing math in benches
+#   random-generator-seed        — fixed seeds are the point: reproducible benches
+#   exception-escape             — bench/test main() is allowed to abort on setup error
+#   non-private-member-variables — Span2D is a deliberate POD view (like std::span)
+#   avoid-pragma-once            — the whole codebase uses #pragma once, by choice
+#   const-correctness            — high-noise, low-signal on local loop vars

@@ -1,0 +1,122 @@
+# Aegis benchmark run
+host: Darwin 25.5.0 arm64
+compiler: Apple clang version 21.0.0 (clang-2100.1.1.101)
+date: 2026-07-04T17:21:59Z
+
+===== bench_rolling =====
+aegis bench: N=10000000, window=100
+
+-- naive O(n*w) --
+rolling_mean(100)              16.5 M rows/sec   (0.608 s)
+rolling_std(100)                4.6 M rows/sec   (2.152 s)
+ema(0.1)                      194.0 M rows/sec   (0.052 s)
+rolling_vwap(100)               8.2 M rows/sec   (1.218 s)
+
+-- naive + SIMD O(n*w), backend: NEON (2-wide f64) --
+rolling_mean(100)              74.1 M rows/sec   (0.135 s)
+
+-- fast O(n) sliding --
+rolling_mean(100)             378.1 M rows/sec   (0.026 s)
+rolling_std(100)              310.7 M rows/sec   (0.032 s)
+rolling_vwap(100)             379.9 M rows/sec   (0.026 s)
+
+===== bench_kernels =====
+aegis tensor kernels
+
+-- matmul: naive ijk vs blocked+FMA (GFLOP/s) --
+   128x128   naive   1.59 GF/s   blocked   5.91 GF/s   3.71x
+   256x256   naive   1.34 GF/s   blocked   5.91 GF/s   4.41x
+   512x512   naive   1.11 GF/s   blocked   4.02 GF/s   3.62x
+
+-- row-wise kernels over a 4096x256 matrix (Melem/s) --
+  softmax      121.4 Melem/s   p50  8638542 ns
+  gelu          45.1 Melem/s   p50 23274834 ns
+  layernorm    117.3 Melem/s   p50  8940333 ns
+
+===== bench_mem =====
+aegis memory subsystem
+
+-- allocate 4 doubles x4096 --
+  arena      267.1 Malloc/s     3.74 ns/alloc
+  malloc      10.9 Malloc/s    91.50 ns/alloc   (24.4x slower)
+
+-- create/destroy Msg x4096 --
+  pool        62.8 Mop/s    15.92 ns/op
+  new/del      9.3 Mop/s   107.35 ns/op   (6.7x slower)
+
+===== bench_runtime =====
+aegis runtime overhead
+
+-- registry dispatch vs direct call (ema, 256-elem col) --
+  direct    1875.0 ns/call
+  registry  1917.0 ns/call
+  dispatch overhead ~42.0 ns (2.2%)
+
+-- one-node graph overhead vs direct call, by batch size --
+  batch        direct ns     graph ns   overhead
+  64                 500        16250     15750 ns
+  1024              7458        19583     12125 ns
+  16384           164833       182834     18001 ns
+  262144         2703542      2721250     17708 ns
+
+-- transform-pair fusion, analytics graph p50 --
+  before  1672125 ns   after  1435916 ns   fused 2 pair(s), removed 0 dead
+
+===== bench_storage =====
+aegis storage replay (warm page cache)
+
+  (1) in-memory sum          2164.0 M rows/sec
+  (2) warm pre-opened scan   1605.3 M rows/sec   (74.2% of in-memory)
+  (3) open+validate+drain      35.1 M rows/sec   (114.00 ms/query, CRC-bound)
+
+  open-time CRC over the whole 91 MB segment is the fixed cost
+  in (3); the scan itself (2) stays near memory bandwidth.
+
+===== bench_ring =====
+aegis ring bench: N=100000000, capacity=65536
+
+baseline (shared line)       13.2 M ops/sec   (7.566 s)
++alignas(64)                 13.4 M ops/sec   (7.459 s)
++cached indices              20.1 M ops/sec   (4.983 s)
+
+===== bench_streaming =====
+aegis streaming: N=5000000, cap=4096, rolling_mean(100), producer=full-throttle
+
+throughput        16.5 M ticks/sec
+latency p50     248083 ns
+latency p99     293292 ns
+latency p99.9   359917 ns
+latency max     376667 ns
+
+consumer empty-poll ratio 0.2%  (backlog regime)
+
+===== bench_parallel =====
+aegis parallel scaling: N=50000000, window=100, hw_threads=8
+
+config           M rows/sec    speedup
+1 (inline)            384.6       1.00
+2                     476.0       1.24
+4                     610.7       1.59
+8                     632.8       1.65
+
+Note: M1 big.LITTLE + no thread pinning (no portable macOS API) makes
+the curve noisy; a clean scaling plot needs homogeneous cores / Linux
+affinity. Trend (parallelism helps, sub-linear) is the takeaway.
+
+===== bench_mmap =====
+aegis mmap bench: N=10000000  (binary 240.0 MB)
+
+CSV parse + compute           2.793 s        3.6 M rows/sec
+binary read + compute         0.068 s      146.8 M rows/sec
+mmap pass 1 + compute         0.038 s      263.2 M rows/sec
+mmap pass 2 + compute         0.029 s      346.2 M rows/sec
+
+Robust finding (cache-state-independent):
+  text CSV parsing is ~97x slower than any binary path — parsing,
+  not I/O, dominates. Binary read and mmap are both far faster and,
+  with the page cache warm, within noise of each other; mmap's
+  distinct benefit is zero-copy (no 76 MB payload allocation).
+  Cold-cache read-vs-mmap is NOT measured here (needs purge) — that
+  claim is deferred rather than faked.
+roundtrip correctness: ok
+

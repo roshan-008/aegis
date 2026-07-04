@@ -1,0 +1,89 @@
+name: ci
+
+# Linux/x86 is the environment macOS/arm64 can't give us: LeakSanitizer works,
+# clang-tidy finds system headers without an -isysroot dance, and this is where
+# the AVX2 kernel path and perf-counter work will eventually be measured. Every
+# command below was validated locally on macOS first; this file is the
+# orchestration. Its first green run happens on the first push.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain versions
+        run: cmake --version && clang++ --version && cargo --version
+      - name: Configure (Release, warnings-as-signal)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - name: Build (C++ under -Wall -Wextra, Rust lib+CLI+server)
+        run: cmake --build build -j
+      - name: Test (all suites incl. Rust unit + fuzz + TCP integration)
+        env:
+          AEGIS_REQUIRE_NETWORK_TEST: "1"   # loopback exists on CI: make the TCP test mandatory
+        run: ctest --test-dir build --output-on-failure
+      - name: Upload compile DB for the lint job
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-commands
+          path: build/compile_commands.json
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Rust static lib (for the FFI test)
+        run: CARGO_TARGET_DIR=build/cargo cargo build --manifest-path rust/Cargo.toml --release
+      - name: ASan + UBSan + LSan (Linux gives us leak detection macOS can't)
+        run: |
+          set -e
+          for t in test_fast test_rolling test_expr; do
+            clang++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -I. test/$t.cpp -o /tmp/san_$t
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 /tmp/san_$t
+          done
+          # Whole runtime incl. Rust FFI / threads / mmap / TCP under sanitizers.
+          clang++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -I. test/test_runtime.cpp build/cargo/release/libaegis_rust.a -lpthread -ldl -lm \
+            -o /tmp/san_runtime
+          AEGIS_REQUIRE_NETWORK_TEST=1 \
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 /tmp/san_runtime
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: rustfmt + clippy (deny warnings)
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml -- --check
+          CARGO_TARGET_DIR=build/cargo cargo clippy --manifest-path rust/Cargo.toml \
+            --all-targets -- -D warnings
+      - name: clang-tidy (curated .clang-tidy)
+        run: |
+          cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          # Header parse needs the Rust artifacts the compile DB references.
+          cmake --build build --target aegis_rust_artifacts -j || true
+          for f in bench/bench_kernels.cpp bench/bench_mem.cpp bench/bench_runtime.cpp \
+                   bench/bench_storage.cpp test/test_runtime.cpp; do
+            clang-tidy -p build "$f"
+          done
+
+  benchmarks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+      - name: Run benchmarks (smoke — CI runners are noisy, perf is not gated here)
+        run: |
+          for b in bench_rolling bench_kernels bench_mem bench_runtime bench_storage; do
+            echo "== $b =="; ./build/$b || exit 1
+          done
+        # Note: absolute throughput on shared CI runners is not a regression gate.
+        # The gate is correctness (build-test) + memory-safety (sanitizers). Perf
+        # numbers of record come from the named hosts in BENCHMARKS.md.

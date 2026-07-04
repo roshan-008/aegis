@@ -1,0 +1,12 @@
+build*/
+rust/target/
+*.aegis
+*.partial
+seal-rs.wal
+
+# ad-hoc timestamped bench runs; the committed sample is sample-run-*.txt
+results/benchmarks-*.txt
+
+# editor/tooling caches
+.cache/
+.DS_Store
