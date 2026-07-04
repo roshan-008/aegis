@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <numeric>
 #include <stdexcept>
@@ -67,5 +69,20 @@ private:
     size_t reps_;
     inline static volatile double checksum_ = 0.0;
 };
+
+// Machine-readable headline numbers for the regression gate. When
+// AEGIS_BENCH_JSON names a file, each call appends one JSONL record; several
+// bench binaries can share one file. scripts/check_bench.py diffs a run
+// against results/baseline-*.jsonl. Convention: metrics ending in "_ns" are
+// lower-is-better, everything else higher-is-better.
+inline void record_metric(const char* suite, const char* metric, double value) {
+    const char* path = std::getenv("AEGIS_BENCH_JSON");
+    if (!path || !*path) return;
+    FILE* f = std::fopen(path, "ab");
+    if (!f) return;
+    std::fprintf(f, "{\"suite\":\"%s\",\"metric\":\"%s\",\"value\":%.6g}\n",
+                 suite, metric, value);
+    std::fclose(f);
+}
 
 }  // namespace aegis::bench

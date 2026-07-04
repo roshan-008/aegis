@@ -46,6 +46,8 @@ int main() {
                 ra.throughput / 1e6, ra.p50_ns / K);
     std::printf("  malloc  %8.1f Malloc/s   %6.2f ns/alloc   (%.1fx slower)\n",
                 rm.throughput / 1e6, rm.p50_ns / K, rm.p50_ns / ra.p50_ns);
+    bench::record_metric("mem", "arena_alloc_ns", ra.p50_ns / K);
+    bench::record_metric("mem", "arena_vs_malloc_speedup", rm.p50_ns / ra.p50_ns);
 
     // Pool: K create/destroy cycles reusing slots, vs new/delete.
     mem::FixedPool<Msg, K> pool;
@@ -67,5 +69,6 @@ int main() {
     std::printf("  pool    %8.1f Mop/s   %6.2f ns/op\n", rp.throughput / 1e6, rp.p50_ns / K);
     std::printf("  new/del %8.1f Mop/s   %6.2f ns/op   (%.1fx slower)\n",
                 rn.throughput / 1e6, rn.p50_ns / K, rn.p50_ns / rp.p50_ns);
+    bench::record_metric("mem", "pool_op_ns", rp.p50_ns / K);
     return 0;
 }

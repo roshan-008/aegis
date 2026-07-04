@@ -80,10 +80,23 @@ jobs:
       - name: Build
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
       - name: Run benchmarks (smoke — CI runners are noisy, perf is not gated here)
+        env:
+          AEGIS_BENCH_JSON: bench-ci.jsonl
         run: |
-          for b in bench_rolling bench_kernels bench_mem bench_runtime bench_storage; do
+          for b in bench_rolling bench_kernels bench_mem bench_runtime bench_scheduler bench_storage; do
             echo "== $b =="; ./build/$b || exit 1
           done
+      - name: Compare against baseline (advisory — different hardware, absolute
+              numbers shift; the hard gate is scripts/check_bench.py on the
+              baseline host)
+        run: python3 scripts/check_bench.py results/baseline-apple-m1.jsonl bench-ci.jsonl --advisory
+      - name: Upload bench metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-metrics
+          path: bench-ci.jsonl
         # Note: absolute throughput on shared CI runners is not a regression gate.
         # The gate is correctness (build-test) + memory-safety (sanitizers). Perf
-        # numbers of record come from the named hosts in BENCHMARKS.md.
+        # numbers of record come from the named hosts in BENCHMARKS.md; the
+        # same-host gate is: AEGIS_BENCH_JSON=cur.jsonl <benches>;
+        # python3 scripts/check_bench.py results/baseline-apple-m1.jsonl cur.jsonl

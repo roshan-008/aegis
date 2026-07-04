@@ -10,3 +10,4 @@ results/benchmarks-*.txt
 # editor/tooling caches
 .cache/
 .DS_Store
+bench-*.jsonl

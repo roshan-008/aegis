@@ -9,6 +9,7 @@
 #include "../src/rolling.hpp"
 #include "../src/rolling_fast.hpp"
 #include "../src/simd.hpp"
+#include "harness.hpp"
 
 using namespace aegis;
 using Clock = std::chrono::steady_clock;
@@ -32,7 +33,7 @@ static TickTable gen_ticks(size_t n, uint64_t seed = 42) {
 }
 
 template <typename F>
-static void bench(const char* name, size_t n, F&& f) {
+static double time_op(const char* name, size_t n, F&& f) {
     // Warmup once, then time best-of-3.
     volatile double sink = f();
     double best = 1e30;
@@ -44,8 +45,9 @@ static void bench(const char* name, size_t n, F&& f) {
         if (s < best) best = s;
     }
     (void)sink;
-    std::printf("%-22s %12.1f M rows/sec   (%.3f s)\n", name,
-                n / best / 1e6, best);
+    const double mrows = n / best / 1e6;
+    std::printf("%-22s %12.1f M rows/sec   (%.3f s)\n", name, mrows, best);
+    return mrows;
 }
 
 int main(int argc, char** argv) {
@@ -55,41 +57,44 @@ int main(int argc, char** argv) {
     TickTable t = gen_ticks(N);
 
     std::puts("-- naive O(n*w) --");
-    bench("rolling_mean(100)", N, [&] {
+    time_op("rolling_mean(100)", N, [&] {
         auto v = naive::rolling_mean(t.price, W);
         return v.back();
     });
-    bench("rolling_std(100)", N, [&] {
+    time_op("rolling_std(100)", N, [&] {
         auto v = naive::rolling_std(t.price, W);
         return v.back();
     });
-    bench("ema(0.1)", N, [&] {
+    time_op("ema(0.1)", N, [&] {
         auto v = naive::ema(t.price, 0.1);
         return v.back();
     });
-    bench("rolling_vwap(100)", N, [&] {
+    time_op("rolling_vwap(100)", N, [&] {
         auto v = naive::rolling_vwap(t.price, t.volume, W);
         return v.back();
     });
 
     std::printf("\n-- naive + SIMD O(n*w), backend: %s --\n", simd::backend());
-    bench("rolling_mean(100)", N, [&] {
+    time_op("rolling_mean(100)", N, [&] {
         auto v = simd::rolling_mean(t.price, W);
         return v.back();
     });
 
     std::puts("\n-- fast O(n) sliding --");
-    bench("rolling_mean(100)", N, [&] {
-        auto v = fast::rolling_mean(t.price, W);
-        return v.back();
-    });
-    bench("rolling_std(100)", N, [&] {
-        auto v = fast::rolling_std(t.price, W);
-        return v.back();
-    });
-    bench("rolling_vwap(100)", N, [&] {
-        auto v = fast::rolling_vwap(t.price, t.volume, W);
-        return v.back();
-    });
+    aegis::bench::record_metric("rolling", "fast_mean_mrows",
+                                time_op("rolling_mean(100)", N, [&] {
+                                    auto v = fast::rolling_mean(t.price, W);
+                                    return v.back();
+                                }));
+    aegis::bench::record_metric("rolling", "fast_std_mrows",
+                                time_op("rolling_std(100)", N, [&] {
+                                    auto v = fast::rolling_std(t.price, W);
+                                    return v.back();
+                                }));
+    aegis::bench::record_metric("rolling", "fast_vwap_mrows",
+                                time_op("rolling_vwap(100)", N, [&] {
+                                    auto v = fast::rolling_vwap(t.price, t.volume, W);
+                                    return v.back();
+                                }));
     return 0;
 }

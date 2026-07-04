@@ -1,0 +1,7 @@
+{"suite": "mem", "metric": "arena_alloc_ns", "value": 1.77002}
+{"suite": "mem", "metric": "arena_vs_malloc_speedup", "value": 19.1379}
+{"suite": "mem", "metric": "pool_op_ns", "value": 6.74438}
+{"suite": "rolling", "metric": "fast_mean_mrows", "value": 387.526}
+{"suite": "rolling", "metric": "fast_std_mrows", "value": 298.188}
+{"suite": "rolling", "metric": "fast_vwap_mrows", "value": 357.585}
+{"suite": "scheduler", "metric": "steal_speedup_skewed", "value": 2.4}

@@ -20,6 +20,7 @@
 #include "../src/runtime/scheduler.hpp"
 #include "../src/runtime/trace.hpp"
 #include "../src/runtime/work_steal.hpp"
+#include "harness.hpp"
 
 using namespace aegis;
 using Clock = std::chrono::steady_clock;
@@ -129,6 +130,9 @@ int main() {
                     ms_level / ms_steal,
                     static_cast<unsigned long long>(stealing.stats().steals -
                                                     steals_before));
+        bench::record_metric("scheduler",
+                             skewed ? "steal_speedup_skewed" : "steal_speedup_uniform",
+                             ms_level / ms_steal);
     }
 
     // One traced skewed run through each scheduler: busy/span/workers is the
