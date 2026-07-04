@@ -148,6 +148,42 @@ int main() {
     assert(engine_stats.accepted.load() == 1 && engine_stats.wire_to_feature.count() == 1);
     (void)took;
 
+    // Observability: the same run under a TraceRecorder yields one span per
+    // executed node, a Chrome-trace file, and the measured critical path.
+    {
+        runtime::TraceRecorder trace;
+        examples::AnalyticsPipeline traced(
+            col_view(static_cast<const double*>(prices.data()), prices.size()));
+        ctx.execute(traced.graph, &trace);
+        const auto events = trace.events();
+        assert(events.size() == 3);  // ema, zscore, signal
+        for (const auto& e : events) assert(e.end_ns >= e.begin_ns);
+        assert(trace.busy_ns() > 0 && trace.span_ns() >= trace.busy_ns() / 3);
+        const auto cp = trace.critical_path(traced.graph);
+        assert((cp.nodes == std::vector<std::string>{"ema", "zscore", "signal"}));
+        assert(cp.total_ns > 0 && cp.total_ns <= trace.span_ns());
+        const auto trace_path =
+            (std::filesystem::temp_directory_path() / "aegis-trace-test.json").string();
+        trace.write_chrome_trace(trace_path);
+        {
+            std::FILE* tf = std::fopen(trace_path.c_str(), "rb");
+            assert(tf);
+            char buf[4096];
+            const size_t got = std::fread(buf, 1, sizeof buf - 1, tf);
+            std::fclose(tf);
+            buf[got] = 0;
+            const std::string body(buf);
+            assert(body.find("\"traceEvents\"") != std::string::npos);
+            assert(body.find("\"zscore\"") != std::string::npos);
+            assert(body.find("\"ph\":\"X\"") != std::string::npos);
+        }
+        std::filesystem::remove(trace_path);
+        // An empty recorder must not lie about latency or paths.
+        runtime::TraceRecorder empty;
+        assert(empty.span_ns() == 0 && empty.busy_ns() == 0);
+        assert(empty.critical_path(traced.graph).total_ns == 0);
+    }
+
     // R3: seal + WAL commit + mmap cursor + range filtering and batching.
     const auto dir = std::filesystem::temp_directory_path() / "aegis-runtime-test";
     std::filesystem::remove_all(dir);

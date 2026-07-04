@@ -34,10 +34,10 @@ struct ExecutionContext {
     // latency observation plus an accepted-work count. This is the method that
     // makes "what does Aegis execute? a DAG of kernels over memory-resident
     // data" a literal API call rather than a slogan.
-    uint64_t execute(TaskGraph& graph) {
+    uint64_t execute(TaskGraph& graph, TraceRecorder* trace = nullptr) {
         if (!scheduler) throw std::runtime_error("ExecutionContext: no scheduler");
         const auto begin = std::chrono::steady_clock::now();
-        scheduler->submit(graph);
+        scheduler->submit(graph, trace);
         const uint64_t ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - begin)

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "task_graph.hpp"
+#include "trace.hpp"
 #include "worker_pool.hpp"
 
 namespace aegis::runtime {
@@ -21,14 +22,24 @@ public:
     explicit Scheduler(size_t workers = std::thread::hardware_concurrency())
         : pool_(workers) {}
 
-    void submit(TaskGraph& graph) {
+    void submit(TaskGraph& graph, TraceRecorder* trace = nullptr) {
         const auto begin = std::chrono::steady_clock::now();
         for (const auto& level : graph.levels()) {
             std::vector<std::future<void>> futures;
             futures.reserve(level.size());
             for (NodeId id : level) {
                 ++stats_.tasks;
-                futures.push_back(pool_.submit(graph.mutable_nodes()[id].invoke));
+                TaskNode& node = graph.mutable_nodes()[id];
+                if (trace) {
+                    futures.push_back(pool_.submit([&node, trace] {
+                        const auto t0 = std::chrono::steady_clock::now();
+                        node.invoke();
+                        trace->record(node.id, node.name, node.klass, t0,
+                                      std::chrono::steady_clock::now());
+                    }));
+                } else {
+                    futures.push_back(pool_.submit(node.invoke));
+                }
             }
             for (auto& future : futures) future.get();
         }
