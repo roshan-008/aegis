@@ -19,7 +19,8 @@ mkdir -p results
   echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo
   for b in bench_rolling bench_kernels bench_mem bench_runtime bench_storage \
-           bench_ring bench_streaming bench_parallel bench_mmap; do
+           bench_financial_pipeline bench_ring bench_streaming bench_parallel \
+           bench_mmap; do
     echo "===== $b ====="
     "./$BUILD/$b" || echo "(exited $?)"
     echo

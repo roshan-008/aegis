@@ -59,9 +59,55 @@ struct Analytics {
     std::vector<double> rmean, rstd, rvwap;
 };
 
-// One serial sweep. This is the hot path we time. rolling_* are the O(n)
-// sliding-window kernels; the loop below is the single-pass reduction fan
-// (min/max, log-return moments, drawdown, and the volume/accumulation stats).
+// Fused rolling kernel: mean, std, and VWAP in a SINGLE sliding-window pass.
+// The three library kernels each sweep the array independently (3 passes, 3x
+// the memory traffic); a desk that cares about latency computes them together
+// because they share the same window advance. Variance uses the shift-by-K
+// trick (var invariant under translation; (x-K) small kills cancellation), K
+// re-centered at each resync to bound accumulator drift — same guarantees as
+// aegis::fast::rolling_std, one pass instead of three.
+static void fused_rolling(const double* p, const double* v, size_t n, size_t W,
+                          std::vector<double>& mean,
+                          std::vector<double>& stdev,
+                          std::vector<double>& vwap) {
+    constexpr size_t RESYNC = 4096;
+    const double nan = std::nan("");
+    mean.assign(n, nan); stdev.assign(n, nan); vwap.assign(n, nan);
+    if (W == 0 || n < W) return;
+    const double invW = 1.0 / (double)W;
+
+    double K = p[0], sum = 0.0, sumsq = 0.0, pv = 0.0, vs = 0.0;
+    for (size_t j = 0; j < W; ++j) {
+        double d = p[j] - K; sum += d; sumsq += d * d;
+        pv += p[j] * v[j]; vs += v[j];
+    }
+    auto emit = [&](size_t i) {
+        double m = K + sum * invW;
+        mean[i] = m;
+        double var = sumsq * invW - (sum * invW) * (sum * invW);
+        stdev[i] = var > 0 ? std::sqrt(var) : 0.0;
+        vwap[i] = vs > 0 ? pv / vs : nan;
+    };
+    emit(W - 1);
+    size_t since = 0;
+    for (size_t i = W; i < n; ++i) {
+        double din = p[i] - K, dout = p[i - W] - K;
+        sum += din - dout;
+        sumsq += din * din - dout * dout;
+        pv += p[i] * v[i] - p[i - W] * v[i - W];
+        vs += v[i] - v[i - W];
+        if (++since == RESYNC) {                 // discard drift, re-center K
+            K = K + sum * invW; sum = 0.0; sumsq = 0.0;
+            for (size_t j = i + 1 - W; j <= i; ++j) { double d = p[j] - K; sum += d; sumsq += d * d; }
+            since = 0;
+        }
+        emit(i);
+    }
+}
+
+// One serial sweep. This is the hot path we time: one fused rolling pass plus
+// one reduction pass (min/max, log-return moments, drawdown, volume/accum) —
+// two passes total, down from four.
 static Analytics run_analytics(const Column& price, const Column& volume,
                                size_t W, bool parallel, unsigned nthreads) {
     const size_t n = price.size();
@@ -77,9 +123,7 @@ static Analytics run_analytics(const Column& price, const Column& volume,
         f_mean.get();
         A.rstd = f_std.get();
     } else {
-        A.rmean = aegis::fast::rolling_mean(price, W);
-        A.rstd  = aegis::fast::rolling_std(price, W);
-        A.rvwap = aegis::fast::rolling_vwap(price, volume, W);
+        fused_rolling(price.raw(), volume.raw(), n, W, A.rmean, A.rstd, A.rvwap);
     }
 
     // --- price extremes + return moments in one sweep ---
