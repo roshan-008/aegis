@@ -12,8 +12,9 @@ export interface Stats {
 export interface Candle { time: number; close: number; volume: number; }
 
 export interface Analysis {
-  key: string; symbol: string; name: string; sector: string; region: string;
+  key: string; symbol: string; range: string; name: string; sector: string; region: string;
   currency: string; exchange: string;
+  firstTime: number; lastTime: number;
   rows: number; threads: number; hw_threads: number; parallel: boolean;
   latency_ns: number; rows_per_sec: number; window: number;
   stats: Stats; candles: Candle[];
@@ -21,6 +22,6 @@ export interface Analysis {
 
 export type Summary = Omit<Analysis, "candles">;
 
-export interface SearchHit { key: string; name: string; sector: string; region: string; }
+export interface SearchHit { symbol: string; key: string; name: string; region: string; exchange: string; }
 
 export interface Quote { price: number; volume?: number; at: number; source: string; latencyMs: number; }

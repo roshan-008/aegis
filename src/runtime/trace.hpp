@@ -108,7 +108,7 @@ public:
                 uint64_t incoming = 0;
                 for (NodeId d : nodes[id].dependencies) {
                     if (!nodes[d].live) continue;
-                    if (best[d] > incoming) {
+                    if (best[d] >= incoming) {
                         incoming = best[d];
                         prev[id] = d;
                     }

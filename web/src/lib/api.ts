@@ -12,8 +12,8 @@ async function get<T>(url: string): Promise<T> {
 export const searchSymbols = (q: string) =>
   get<SearchHit[]>(`/api/search?q=${encodeURIComponent(q)}`);
 
-export const fetchAnalysis = (symbol: string) =>
-  get<Analysis>(`/api/analyze?symbol=${encodeURIComponent(symbol)}`);
+export const fetchAnalysis = (symbol: string, range = "5y") =>
+  get<Analysis>(`/api/analyze?symbol=${encodeURIComponent(symbol)}&range=${encodeURIComponent(range)}`);
 
 export const fetchUniverse = () => get<Summary[]>(`/api/universe`);
 

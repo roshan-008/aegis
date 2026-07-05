@@ -168,6 +168,24 @@ table.uni td .co { display: block; font-family: var(--sans); font-weight: 400; c
 .feed-lamp { width: 8px; height: 8px; border-radius: 99px; background: var(--forest); box-shadow: 0 0 0 0 var(--forest); animation: lamp 1.8s infinite; }
 @keyframes lamp { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--forest) 55%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 
+/* ---------- timeframe + rate controls ---------- */
+.controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 22px; }
+.tf { display: inline-flex; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.tf button {
+  background: none; border: 0; padding: 7px 15px; border-radius: 8px; cursor: pointer;
+  font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+  transition: background 0.15s, color 0.15s;
+}
+.tf button:hover { color: var(--ink); }
+.tf button.on { background: var(--surface); color: var(--forest-deep); box-shadow: 0 1px 2px rgba(30,34,28,0.08); }
+.rate { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+.rate input {
+  width: 56px; text-align: center; font-family: var(--mono); font-size: 13px; font-weight: 600;
+  color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong);
+  border-radius: 8px; padding: 6px 8px; outline: none;
+}
+.rate input:focus { border-color: var(--forest); box-shadow: 0 0 0 3px color-mix(in srgb, var(--forest) 16%, transparent); }
+
 /* ---------- stat tiles ---------- */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin: 24px 0; box-shadow: var(--shadow); }
 .tile { background: var(--surface); padding: 16px 18px; }

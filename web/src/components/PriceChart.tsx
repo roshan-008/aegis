@@ -36,7 +36,8 @@ export default function PriceChart({ data }: { data: Analysis }) {
         vertLine: { color: css("--line-strong"), width: 1, style: LineStyle.Solid, labelBackgroundColor: css("--forest") },
         horzLine: { color: css("--line-strong"), labelBackgroundColor: css("--forest") },
       },
-      handleScale: { axisPressedMouseMove: false },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+      handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: true, price: false } },
       autoSize: true,
     });
     chartRef.current = chart;

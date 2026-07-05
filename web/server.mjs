@@ -1,7 +1,9 @@
 // Aegis data service.
 // Fetches live OHLCV, runs it through the compiled C++ `analyze` engine, and
 // serves the results to the frontend. The engine is the source of truth for
-// every analytic; this process only moves bytes and caches.
+// every analytic; this process only moves bytes and caches. Any symbol Yahoo
+// knows can be analyzed — the curated list below only powers the watchlist and
+// alias search ("tata", "nifty", "nvidia").
 
 import express from "express";
 import { spawn } from "node:child_process";
@@ -18,7 +20,7 @@ if (!existsSync(ENGINE)) {
   console.error(`  build it first:  cmake --build build --target analyze\n`);
 }
 
-// symbol, name, sector, region, aliases
+// symbol, name, sector, region, aliases — the watchlist + alias search.
 const UNIVERSE = [
   ["AAPL", "Apple", "Technology", "US", ["apple"]],
   ["MSFT", "Microsoft", "Technology", "US", ["microsoft"]],
@@ -45,8 +47,8 @@ const UNIVERSE = [
   ["^DJI", "Dow Jones", "Index", "US", ["dow", "dow jones"]],
   ["^NSEI", "Nifty 50", "Index", "India", ["nifty", "nifty 50"]],
   ["^BSESN", "BSE Sensex", "Index", "India", ["sensex", "bse"]],
+  ["TATAMOTORS.NS", "Tata Motors", "Automotive", "India", ["tata motors", "tata"]],
   ["TATAPOWER.NS", "Tata Power", "Energy", "India", ["tata power", "tata"]],
-  ["TITAN.NS", "Titan", "Consumer", "India", ["titan", "tata"]],
   ["TCS.NS", "Tata Consultancy", "Technology", "India", ["tcs", "tata"]],
   ["TATASTEEL.NS", "Tata Steel", "Materials", "India", ["tata steel", "tata"]],
   ["RELIANCE.NS", "Reliance Industries", "Energy", "India", ["reliance"]],
@@ -60,8 +62,20 @@ const UNIVERSE = [
 ];
 
 const CRYPTO = { "BTC-USD": "bitcoin", "ETH-USD": "ethereum", "SOL-USD": "solana" };
-const keyOf = (s) => s.replace(/^\^/, "").replace(/\.NS$/, "").replace(/-USD$/, "");
-const META = new Map(UNIVERSE.map(([sym, name, sector, region, aliases]) => [keyOf(sym), { symbol: sym, name, sector, region, aliases }]));
+const displayKey = (s) => s.replace(/^\^/, "").replace(/\.(NS|BO|KS|L|TO|HK|DE|PA|SS|SZ)$/i, "").replace(/-USD$/, "");
+const SYM = new Map(UNIVERSE.map(([symbol, name, sector, region, aliases]) => [symbol.toUpperCase(), { symbol, name, sector, region, aliases }]));
+
+function regionOf(symbol) {
+  const s = symbol.toUpperCase();
+  if (s.endsWith(".NS") || s.endsWith(".BO")) return "India";
+  if (s.endsWith("-USD")) return "Crypto";
+  if (s.startsWith("^")) return "Index";
+  if (s.endsWith(".L")) return "UK";
+  if (s.endsWith(".KS")) return "Korea";
+  if (s.endsWith(".TO")) return "Canada";
+  if (s.endsWith(".HK")) return "Hong Kong";
+  return "US";
+}
 
 const UA = { "User-Agent": "Mozilla/5.0" };
 const now = () => Date.now();
@@ -85,6 +99,29 @@ async function yahooChart(symbol, range = "5y", interval = "1d") {
   throw lastErr;
 }
 
+async function yahooSearch(q) {
+  for (const host of ["query1", "query2"]) {
+    try {
+      const url = `https://${host}.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=10&newsCount=0&enableFuzzyQuery=true`;
+      const r = await fetch(url, { headers: UA });
+      if (!r.ok) throw new Error(`search ${r.status}`);
+      const j = await r.json();
+      return (j.quotes || [])
+        .filter((x) => x.symbol && ["EQUITY", "ETF", "INDEX", "CRYPTOCURRENCY", "MUTUALFUND", "CURRENCY"].includes(x.quoteType))
+        .map((x) => ({
+          symbol: x.symbol,
+          key: displayKey(x.symbol),
+          name: x.shortname || x.longname || x.symbol,
+          region: regionOf(x.symbol),
+          exchange: x.exchDisp || x.exchange || "",
+        }));
+    } catch {
+      /* try next host */
+    }
+  }
+  return [];
+}
+
 function runEngine(symbol, csv) {
   return new Promise((res, rej) => {
     const proc = spawn(ENGINE, [symbol]);
@@ -98,11 +135,10 @@ function runEngine(symbol, csv) {
   });
 }
 
-// analyze one instrument end to end (fetch -> engine -> shape).
-async function analyze(key, range = "5y") {
-  const meta = META.get(key);
-  if (!meta) throw new Error(`unknown instrument ${key}`);
-  const res = await yahooChart(meta.symbol, range);
+// analyze any symbol end to end: fetch -> engine -> shape. `range` is a Yahoo
+// range token (1mo, 6mo, 1y, 5y, 10y, max, ...).
+async function analyze(symbol, range = "5y") {
+  const res = await yahooChart(symbol, range);
   const q = res.indicators?.quote?.[0] || {};
   const ts = res.timestamp || [];
   const closes = q.close || [];
@@ -116,16 +152,21 @@ async function analyze(key, range = "5y") {
     candles.push({ time: ts[i], close: c, volume: v });
     lines.push(`${c},${v}`);
   }
-  const report = await runEngine(meta.symbol, lines.join("\n"));
+  if (candles.length < 8) throw new Error("not enough history for this range");
+  const report = await runEngine(symbol, lines.join("\n"));
   const m = res.meta || {};
+  const curated = SYM.get(symbol.toUpperCase());
   return {
-    key,
-    symbol: meta.symbol,
-    name: meta.name,
-    sector: meta.sector,
-    region: meta.region,
+    key: displayKey(symbol),
+    symbol,
+    range,
+    name: curated?.name || m.longName || m.shortName || displayKey(symbol),
+    sector: curated?.sector || m.instrumentType || regionOf(symbol),
+    region: curated?.region || regionOf(symbol),
     currency: m.currency || "USD",
-    exchange: m.fullExchangeName || meta.region,
+    exchange: m.fullExchangeName || curated?.region || regionOf(symbol),
+    firstTime: candles[0].time,
+    lastTime: candles[candles.length - 1].time,
     rows: report.rows,
     threads: report.threads,
     hw_threads: report.hw_threads,
@@ -138,43 +179,56 @@ async function analyze(key, range = "5y") {
   };
 }
 
-// --- simple in-memory cache so the table and detail don't refetch constantly ---
-const cache = new Map(); // key -> { at, data }
+const cache = new Map(); // symbol|range -> { at, data }
 const TTL = 3 * 60 * 1000;
-async function analyzeCached(key, range = "5y") {
-  const hit = cache.get(key + range);
+async function analyzeCached(symbol, range = "5y") {
+  const k = symbol.toUpperCase() + "|" + range;
+  const hit = cache.get(k);
   if (hit && now() - hit.at < TTL) return hit.data;
-  const data = await analyze(key, range);
-  cache.set(key + range, { at: now(), data });
+  const data = await analyze(symbol, range);
+  cache.set(k, { at: now(), data });
   return data;
 }
 
 const app = express();
 
-app.get("/api/search", (req, res) => {
-  const q = String(req.query.q || "").trim().toLowerCase();
+// live search: curated (alias-aware) first, then anything Yahoo knows.
+app.get("/api/search", async (req, res) => {
+  const q = String(req.query.q || "").trim();
   if (!q) return res.json([]);
-  const scored = [];
-  for (const [, m] of META) {
-    const key = keyOf(m.symbol).toLowerCase();
-    const hay = [key, m.name.toLowerCase(), ...m.aliases];
+  const lower = q.toLowerCase();
+  const curated = [];
+  for (const [, m] of SYM) {
+    const key = displayKey(m.symbol).toLowerCase();
     let s = 99;
-    if (key === q) s = 0;
-    else if (key.startsWith(q)) s = 1;
-    else if (m.name.toLowerCase().startsWith(q)) s = 2;
-    else if (m.aliases.some((a) => a.startsWith(q))) s = 3;
-    else if (hay.some((h) => h.includes(q))) s = 4;
-    if (s < 99) scored.push({ s, key: keyOf(m.symbol), name: m.name, sector: m.sector, region: m.region });
+    if (key === lower) s = 0;
+    else if (key.startsWith(lower)) s = 1;
+    else if (m.name.toLowerCase().startsWith(lower)) s = 2;
+    else if (m.aliases.some((a) => a.startsWith(lower))) s = 3;
+    else if (key.includes(lower) || m.name.toLowerCase().includes(lower) || m.aliases.some((a) => a.includes(lower))) s = 4;
+    if (s < 99) curated.push({ s, symbol: m.symbol, key: displayKey(m.symbol), name: m.name, region: m.region, exchange: m.region });
   }
-  scored.sort((a, b) => a.s - b.s || a.key.localeCompare(b.key));
-  res.json(scored.slice(0, 8));
+  curated.sort((a, b) => a.s - b.s || a.key.localeCompare(b.key));
+
+  let live = [];
+  try { live = await yahooSearch(q); } catch { /* offline: curated only */ }
+
+  const seen = new Set(curated.map((c) => c.symbol.toUpperCase()));
+  const merged = curated.map(({ s, ...rest }) => (void s, rest));
+  for (const r of live) {
+    if (seen.has(r.symbol.toUpperCase())) continue;
+    seen.add(r.symbol.toUpperCase());
+    merged.push(r);
+  }
+  res.json(merged.slice(0, 10));
 });
 
 app.get("/api/analyze", async (req, res) => {
   try {
-    const key = String(req.query.symbol || "").toUpperCase();
-    const data = await analyzeCached(key, String(req.query.range || "5y"));
-    res.json(data);
+    const symbol = String(req.query.symbol || "");
+    if (!symbol) throw new Error("symbol required");
+    const range = String(req.query.range || "5y");
+    res.json(await analyzeCached(symbol, range));
   } catch (e) {
     res.status(502).json({ error: String(e.message || e) });
   }
@@ -182,13 +236,12 @@ app.get("/api/analyze", async (req, res) => {
 
 // live quote: crypto via CoinGecko, everything else via Yahoo 1m.
 app.get("/api/quote", async (req, res) => {
-  const key = String(req.query.symbol || "").toUpperCase();
-  const meta = META.get(key);
-  if (!meta) return res.status(404).json({ error: "unknown" });
+  const symbol = String(req.query.symbol || "");
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
   const started = now();
   try {
-    if (CRYPTO[meta.symbol]) {
-      const id = CRYPTO[meta.symbol];
+    const id = CRYPTO[symbol.toUpperCase()];
+    if (id) {
       const r = await fetch(
         `https://api.coingecko.com/api/v3/simple/price?ids=${id}&vs_currencies=usd&include_24hr_vol=true&include_last_updated_at=true`,
         { headers: UA }
@@ -198,7 +251,7 @@ app.get("/api/quote", async (req, res) => {
       if (!Number.isFinite(row.usd)) throw new Error("no price");
       return res.json({ price: row.usd, volume: row.usd_24h_vol, at: (row.last_updated_at || now() / 1000) * 1000, source: "CoinGecko", latencyMs: now() - started });
     }
-    const chart = await yahooChart(meta.symbol, "1d", "1m");
+    const chart = await yahooChart(symbol, "1d", "1m");
     const q = chart.indicators?.quote?.[0] || {};
     const closes = (q.close || []).filter(Number.isFinite);
     const vols = (q.volume || []).filter(Number.isFinite);
@@ -211,14 +264,13 @@ app.get("/api/quote", async (req, res) => {
   }
 });
 
-// universe summaries for the comparison table (analyzed on the engine, cached).
+// watchlist summaries for the comparison table (analyzed on the engine, cached).
 app.get("/api/universe", async (_req, res) => {
-  const keys = [...META.keys()];
   const out = [];
   await Promise.all(
-    keys.map(async (k) => {
+    [...SYM.values()].map(async (m) => {
       try {
-        const d = await analyzeCached(k);
+        const d = await analyzeCached(m.symbol);
         const { candles, ...summary } = d;
         void candles;
         out.push(summary);
@@ -227,8 +279,8 @@ app.get("/api/universe", async (_req, res) => {
       }
     })
   );
-  const order = new Map(keys.map((k, i) => [k, i]));
-  out.sort((a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0));
+  const order = new Map([...SYM.values()].map((m, i) => [m.symbol.toUpperCase(), i]));
+  out.sort((a, b) => (order.get(a.symbol.toUpperCase()) ?? 0) - (order.get(b.symbol.toUpperCase()) ?? 0));
   res.json(out);
 });
 

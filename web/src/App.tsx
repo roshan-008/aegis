@@ -5,7 +5,18 @@ import { recompute } from "./lib/live";
 import Home from "./components/Home";
 import Instrument from "./components/Instrument";
 
-const POLL_MS = 6000;
+const QUOTE_MS = 8000; // real quote refresh (bounded by provider rate limits)
+const PRIVATE: Record<string, string> = {
+  spacex: "SpaceX", stripe: "Stripe", databricks: "Databricks", bytedance: "ByteDance",
+  revolut: "Revolut", canva: "Canva", discord: "Discord",
+};
+
+function gauss() {
+  let u = 0, v = 0;
+  while (!u) u = Math.random();
+  while (!v) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
 
 export default function App() {
   const [universe, setUniverse] = useState<Summary[]>([]);
@@ -15,6 +26,8 @@ export default function App() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [quote, setQuote] = useState<Quote | null>(null);
+  const [range, setRange] = useState("5y");
+  const [rate, setRate] = useState(3); // synthetic ticks per second between quotes
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,62 +35,91 @@ export default function App() {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [priv, setPriv] = useState<string | null>(null);
   const [hi, setHi] = useState(-1);
-  const pollRef = useRef<number | null>(null);
+  const [searching, setSearching] = useState(false);
 
-  // universe once
+  const quoteTimer = useRef<number | null>(null);
+  const churnTimer = useRef<number | null>(null);
+  const anchor = useRef(0);
+  const aRef = useRef<Analysis | null>(null);
+
   useEffect(() => {
     fetchUniverse().then(setUniverse).catch(() => {}).finally(() => setUniLoading(false));
   }, []);
 
-  const stopPoll = () => { if (pollRef.current) { clearTimeout(pollRef.current); pollRef.current = null; } };
-
-  const startPoll = useCallback((a: Analysis) => {
-    stopPoll();
-    const tick = async () => {
-      try {
-        const qt = await fetchQuote(a.key);
-        setQuote(qt);
-        setStats(recompute(a, qt.price, qt.volume));
-      } catch { /* keep last good stats */ }
-      pollRef.current = window.setTimeout(tick, POLL_MS);
-    };
-    pollRef.current = window.setTimeout(tick, 1500);
+  const stopLive = useCallback(() => {
+    if (quoteTimer.current) { clearTimeout(quoteTimer.current); quoteTimer.current = null; }
+    if (churnTimer.current) { clearInterval(churnTimer.current); churnTimer.current = null; }
   }, []);
 
-  const open = useCallback((key: string) => {
-    setCurrent(key); setQ(""); setHits([]); setPriv(null); setError(null);
-    setDetailLoading(true); setAnalysis(null); setStats(null); setQuote(null);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    fetchAnalysis(key)
-      .then((a) => { setAnalysis(a); setStats(a.stats); startPoll(a); })
+  // synthetic tick anchored to the last real price — keeps the tape churning
+  // between provider polls; each tick recomputes stats on the engine's series.
+  const churn = useCallback(() => {
+    const a = aRef.current;
+    if (!a || anchor.current <= 0) return;
+    const sigmaDaily = a.stats.ann_vol_pct / 100 / Math.sqrt(252);
+    anchor.current *= Math.exp(sigmaDaily * 0.28 * gauss());
+    setStats(recompute(a, anchor.current));
+  }, []);
+
+  const startChurn = useCallback((r: number) => {
+    if (churnTimer.current) clearInterval(churnTimer.current);
+    if (r > 0) churnTimer.current = window.setInterval(churn, Math.max(50, 1000 / r));
+  }, [churn]);
+
+  const pollQuote = useCallback(() => {
+    const a = aRef.current;
+    if (!a) return;
+    fetchQuote(a.symbol)
+      .then((qt) => { setQuote(qt); anchor.current = qt.price; setStats(recompute(a, qt.price, qt.volume)); })
+      .catch(() => {})
+      .finally(() => { quoteTimer.current = window.setTimeout(pollQuote, QUOTE_MS); });
+  }, []);
+
+  const load = useCallback((symbol: string, r: string) => {
+    stopLive();
+    setDetailLoading(true); setError(null);
+    fetchAnalysis(symbol, r)
+      .then((a) => {
+        setAnalysis(a); aRef.current = a; setStats(a.stats); anchor.current = a.stats.last; setQuote(null);
+        quoteTimer.current = window.setTimeout(pollQuote, 800);
+        startChurn(rate);
+      })
       .catch((e) => setError(String(e.message || e)))
       .finally(() => setDetailLoading(false));
-  }, [startPoll]);
+  }, [pollQuote, startChurn, rate, stopLive]);
 
-  const goHome = () => { stopPoll(); setCurrent(null); setAnalysis(null); setStats(null); setError(null); setQ(""); setHits([]); };
+  const open = useCallback((symbol: string) => {
+    setCurrent(symbol); setQ(""); setHits([]); setPriv(null);
+    setAnalysis(null); setStats(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    load(symbol, range);
+  }, [load, range]);
 
-  useEffect(() => () => stopPoll(), []);
+  const changeRange = (r: string) => { setRange(r); if (current) load(current, r); };
+  const changeRate = (r: number) => { setRate(r); startChurn(r); };
 
-  // search (debounced)
+  const goHome = () => { stopLive(); setCurrent(null); setAnalysis(null); aRef.current = null; setStats(null); setError(null); setQ(""); setHits([]); };
+
+  useEffect(() => () => stopLive(), [stopLive]);
+
+  // live search (debounced): curated + anything Yahoo knows
   useEffect(() => {
     const v = q.trim();
-    if (!v) { setHits([]); setPriv(null); return; }
+    if (!v) { setHits([]); setPriv(null); setSearching(false); return; }
+    setSearching(true);
     const id = setTimeout(() => {
       searchSymbols(v)
-        .then((h) => {
-          setHits(h);
-          const PRIVATE: Record<string, string> = { spacex: "SpaceX", stripe: "Stripe", databricks: "Databricks", bytedance: "ByteDance", revolut: "Revolut", canva: "Canva", discord: "Discord" };
-          setPriv(!h.length ? PRIVATE[v.toLowerCase()] || null : null);
-        })
-        .catch(() => {});
-    }, 140);
+        .then((h) => { setHits(h); setPriv(!h.length ? PRIVATE[v.toLowerCase()] || null : null); })
+        .catch(() => {})
+        .finally(() => setSearching(false));
+    }, 180);
     return () => clearTimeout(id);
   }, [q]);
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") { setHi((h) => Math.min(h + 1, hits.length - 1)); e.preventDefault(); }
     else if (e.key === "ArrowUp") { setHi((h) => Math.max(h - 1, 0)); e.preventDefault(); }
-    else if (e.key === "Enter" && hits.length) open(hits[hi < 0 ? 0 : hi].key);
+    else if (e.key === "Enter" && hits.length) open(hits[hi < 0 ? 0 : hi].symbol);
     else if (e.key === "Escape") { setHits([]); setPriv(null); }
   };
 
@@ -97,19 +139,20 @@ export default function App() {
               value={q}
               onChange={(e) => { setQ(e.target.value); setHi(-1); }}
               onKeyDown={onKey}
-              placeholder="Search NVIDIA, Tata, Nifty, Bitcoin…"
+              placeholder="Search any stock, index or crypto — worldwide…"
               autoComplete="off" spellCheck={false}
             />
-            {(hits.length > 0 || priv) && (
+            {(hits.length > 0 || priv || (searching && q)) && (
               <div className="suggest">
                 {hits.map((h, i) => (
-                  <button key={h.key} className={i === hi ? "hi" : ""} onMouseDown={() => open(h.key)}>
+                  <button key={h.symbol} className={i === hi ? "hi" : ""} onMouseDown={() => open(h.symbol)}>
                     <span className="sym">{h.key}</span>
                     <span className="nm">{h.name}</span>
-                    <span className="rg">{h.region}</span>
+                    <span className="rg">{h.exchange || h.region}</span>
                   </button>
                 ))}
-                {priv && !hits.length && (
+                {!hits.length && searching && <div className="empty">searching…</div>}
+                {priv && !hits.length && !searching && (
                   <div className="empty"><b>{priv}</b> is privately held — not publicly traded, so there is no price feed to analyze.</div>
                 )}
               </div>
@@ -129,14 +172,19 @@ export default function App() {
           </div>
         )}
         {current && analysis && stats && (
-          <Instrument data={analysis} stats={stats} quote={quote} onBack={goHome} />
+          <Instrument
+            data={analysis} stats={stats} quote={quote}
+            range={range} onRange={changeRange}
+            rate={rate} onRate={changeRate}
+            onBack={goHome}
+          />
         )}
       </main>
 
       <footer>
         <span>Aegis</span><span>·</span>
         <span>live OHLCV → C++ engine → analytics</span><span>·</span>
-        <span>quotes refresh every {POLL_MS / 1000}s</span>
+        <span>quotes every {QUOTE_MS / 1000}s · tape {rate}/s</span>
       </footer>
     </>
   );

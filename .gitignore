@@ -1,13 +1,33 @@
+# Build & compilation outputs
 build*/
 rust/target/
+dist/
 *.aegis
 *.partial
 seal-rs.wal
 
-# ad-hoc timestamped bench runs; the committed sample is sample-run-*.txt
-results/benchmarks-*.txt
+# Node & Python virtualenvs / caches
+node_modules/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage/
 
-# editor/tooling caches
+# Environment files & secrets
+.env
+.env.local
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Benchmark outputs & temporary files
+results/benchmarks-*.txt
+bench-*.jsonl
+logs/
+tmp/
 .cache/
 .DS_Store
-bench-*.jsonl

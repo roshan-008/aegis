@@ -25,7 +25,7 @@ const COLS: Col[] = [
 export default function Home({
   universe, loading, onPick,
 }: {
-  universe: Summary[]; loading: boolean; onPick: (key: string) => void;
+  universe: Summary[]; loading: boolean; onPick: (symbol: string) => void;
 }) {
   const [sortKey, setSortKey] = useState("ret");
   const [asc, setAsc] = useState(false);
@@ -77,7 +77,7 @@ export default function Home({
               </thead>
               <tbody>
                 {rows.map((s) => (
-                  <tr key={s.key} onClick={() => onPick(s.key)}>
+                  <tr key={s.symbol} onClick={() => onPick(s.symbol)}>
                     {COLS.map((c) => {
                       const raw = c.get(s);
                       let cls = "";
