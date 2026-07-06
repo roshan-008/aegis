@@ -268,6 +268,23 @@ int main() {
                 for (size_t d : deps[j]) want[j] += want[d];
             }
             stealing.submit(dag);
+
+            for (size_t i = 0; i < out.size(); ++i) {
+                if (out[i] != want[i]) {
+                    std::cerr << "\n===== Scheduler Mismatch =====\n";
+                    std::cerr << "Node      : " << i << "\n";
+                    std::cerr << "Expected  : " << want[i] << "\n";
+                    std::cerr << "Actual    : " << out[i] << "\n";
+
+                    std::cerr << "Dependencies: ";
+                    for (size_t d : deps[i])
+                        std::cerr << d << " ";
+                    std::cerr << "\n";
+
+                    break;
+                    }
+            }
+
             assert(out == want);
         }
         assert(stealing.stats().graph_runs == 6);
