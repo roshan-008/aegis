@@ -1,4 +1,3 @@
-#include <iostream>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -246,7 +245,6 @@ int main() {
         // nodes and writes out[j] = 1 + sum(out[deps]); dependency-order
         // execution is the only way to reproduce the sequential answer.
         std::mt19937_64 rng(42);
-        std::cout << "Starting randomized DAG tests\n" << std::flush;
         for (int round = 0; round < 5; ++round) {
             const size_t n = 200;
             std::vector<double> out(n, 0.0), want(n, 0.0);
@@ -269,26 +267,7 @@ int main() {
                 want[j] = 1.0;
                 for (size_t d : deps[j]) want[j] += want[d];
             }
-            std::cout << "[Round " << round << "] before submit\n" << std::flush;
             stealing.submit(dag);
-            std::cout << "[Round " << round << "] after submit\n" << std::flush;
-            
-            for (size_t i = 0; i < out.size(); ++i) {
-                if (out[i] != want[i]) {
-                    std::cerr << "\n===== Scheduler Mismatch =====\n";
-                    std::cerr << "Node      : " << i << "\n";
-                    std::cerr << "Expected  : " << want[i] << "\n";
-                    std::cerr << "Actual    : " << out[i] << "\n";
-
-                    std::cerr << "Dependencies: ";
-                    for (size_t d : deps[i])
-                        std::cerr << d << " ";
-                    std::cerr << "\n";
-
-                    break;
-                    }
-            }
-
             assert(out == want);
         }
         assert(stealing.stats().graph_runs == 6);
@@ -297,7 +276,6 @@ int main() {
 
         // A throwing node cancels the run, propagates, and leaves the
         // scheduler reusable.
-        std::cout << "Starting exception propagation test\n" << std::flush;
         runtime::TaskGraph bad;
         auto b0 = bad.add_node("boom", kernels::KernelClass::TRANSFORM,
                                [] { throw std::runtime_error("boom"); });
@@ -346,7 +324,6 @@ int main() {
     assert(rows == 5 && close(sum, 102 + 103 + 104 + 105 + 106));
 
     // Rust std::net server -> C++ readv/arena -> bounded SPSC channel.
-    std::cout << "Starting network integration test\n" << std::flush;
     const uint16_t port = unused_loopback_port();
     if (std::getenv("AEGIS_REQUIRE_NETWORK_TEST")) assert(port != 0);
     if (port != 0) {
