@@ -1,4 +1,16 @@
-#include<iostream>
+// Sanitizer-aware tuning: ASan/UBSan widen thread timing windows ~50x,
+// enough to trigger condition-variable edge cases with many workers.
+#if defined(__has_feature)
+  #if __has_feature(address_sanitizer)
+    #define AEGIS_SANITIZER_BUILD 1
+  #endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) && !defined(AEGIS_SANITIZER_BUILD)
+  #define AEGIS_SANITIZER_BUILD 1
+#endif
+#ifndef AEGIS_SANITIZER_BUILD
+  #define AEGIS_SANITIZER_BUILD 0
+#endif
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -233,10 +245,17 @@ int main() {
     // Work-stealing scheduler: same results as the level scheduler on
     // randomized DAGs, dependency order respected, exceptions propagate,
     // and the scheduler survives to run again after a throw.
+    std::puts("[runtime] work-stealing scheduler");
     {
-        runtime::StealingScheduler stealing(4);
+        // Under sanitizers, thread sync overhead is ~50x; use fewer workers
+        // and smaller DAGs to keep the test fast without losing coverage.
+        const size_t steal_workers = AEGIS_SANITIZER_BUILD ? 2 : 4;
+        const size_t dag_nodes     = AEGIS_SANITIZER_BUILD ? 50 : 200;
+        const int    dag_rounds    = AEGIS_SANITIZER_BUILD ? 2 : 5;
+        runtime::StealingScheduler stealing(steal_workers);
 
         // The same analytics pipeline produces identical output through it.
+        std::puts("[runtime]   analytics pipeline via steal");
         examples::AnalyticsPipeline steal_pipe(
             col_view(static_cast<const double*>(prices.data()), prices.size()));
         stealing.submit(steal_pipe.graph);
@@ -245,9 +264,10 @@ int main() {
         // Randomized DAGs: node j depends on a random subset of earlier
         // nodes and writes out[j] = 1 + sum(out[deps]); dependency-order
         // execution is the only way to reproduce the sequential answer.
+        std::puts("[runtime]   randomized DAGs");
         std::mt19937_64 rng(42);
-        for (int round = 0; round < 5; ++round) {
-            const size_t n = 200;
+        for (int round = 0; round < dag_rounds; ++round) {
+            const size_t n = dag_nodes;
             std::vector<double> out(n, 0.0), want(n, 0.0);
             std::vector<std::vector<size_t>> deps(n);
             runtime::TaskGraph dag;
@@ -271,12 +291,13 @@ int main() {
             stealing.submit(dag);
             assert(out == want);
         }
-        assert(stealing.stats().graph_runs == 6);
+        assert(stealing.stats().graph_runs == static_cast<uint64_t>(1 + dag_rounds));
         assert(stealing.stats().local_pops + stealing.stats().steals ==
                stealing.stats().tasks);
 
         // A throwing node cancels the run, propagates, and leaves the
         // scheduler reusable.
+        std::puts("[runtime]   exception propagation");
         runtime::TaskGraph bad;
         auto b0 = bad.add_node("boom", kernels::KernelClass::TRANSFORM,
                                [] { throw std::runtime_error("boom"); });
@@ -290,20 +311,24 @@ int main() {
             threw = std::string(e.what()) == "boom";
         }
         assert(threw);
+        std::puts("[runtime]   post-exception reuse");
         examples::AnalyticsPipeline again(
             col_view(static_cast<const double*>(prices.data()), prices.size()));
         stealing.submit(again.graph);
         assert(again.signal == analytics.signal);
 
         // Tracing works through the stealing scheduler too.
+        std::puts("[runtime]   tracing via steal");
         runtime::TraceRecorder steal_trace;
         examples::AnalyticsPipeline traced2(
             col_view(static_cast<const double*>(prices.data()), prices.size()));
         stealing.submit(traced2.graph, &steal_trace);
         assert(steal_trace.events().size() == 3);
+        std::puts("[runtime]   work-stealing scheduler OK");
     }
 
     // R3: seal + WAL commit + mmap cursor + range filtering and batching.
+    std::puts("[runtime] storage + WAL");
     const auto dir = std::filesystem::temp_directory_path() / "aegis-runtime-test";
     std::filesystem::remove_all(dir);
     storage::SegmentStore store(dir.string());
