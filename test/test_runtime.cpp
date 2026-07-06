@@ -339,19 +339,28 @@ int main() {
                 server_error = std::current_exception();
             }
         });
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         runtime::RuntimeStats feed_stats;
         runtime::BoundedChannel<Tick, 256> feed_channel(
             runtime::BackpressurePolicy::Block, &feed_stats);
-        net::TcpFeed feed("127.0.0.1", port);
+        std::unique_ptr<net::TcpFeed> feed;
+        for (int retries = 0; retries < 100; ++retries) {
+            try {
+                feed = std::make_unique<net::TcpFeed>("127.0.0.1", port);
+                break;
+            } catch (...) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+        assert(feed != nullptr);
         size_t accepted = 0;
-        for (size_t attempts = 0; accepted < 10 && attempts < 20; ++attempts) {
+        for (size_t attempts = 0; accepted < 10 && attempts < 50; ++attempts) {
             arena.reset();
-            accepted += feed.receive(arena, feed_channel, 64);
+            accepted += feed->receive(arena, feed_channel, 64);
+            if (accepted < 10) std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         server.join();
         if (server_error) std::rethrow_exception(server_error);
-        assert(sent == 10 && accepted == 10 && feed.stats().frames == 10);
+        assert(sent == 10 && accepted == 10 && feed->stats().frames == 10);
         for (size_t i = 0; i < 10; ++i) {
             auto tick = feed_channel.pop();
             assert(tick && tick->ts_ns == 1000 + i * 10 && tick->price == 100 + i);
