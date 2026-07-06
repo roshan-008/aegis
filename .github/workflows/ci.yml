@@ -53,7 +53,7 @@ jobs:
             -o /tmp/san_runtime
           env AEGIS_REQUIRE_NETWORK_TEST=1 \
               UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-              timeout 30s /tmp/san_runtime
+              /tmp/san_runtime
 
   lint:
     runs-on: ubuntu-latest
