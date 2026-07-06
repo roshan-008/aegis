@@ -299,6 +299,8 @@ int main() {
         examples::AnalyticsPipeline traced2(
             col_view(static_cast<const double*>(prices.data()), prices.size()));
         stealing.submit(traced2.graph, &steal_trace);
+        std::cout<< "steal events = "<< steal_trace.events().size()<< '\n';
+
         assert(steal_trace.events().size() == 3);
     }
 
