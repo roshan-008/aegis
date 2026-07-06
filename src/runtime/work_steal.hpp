@@ -148,7 +148,10 @@ private:
             std::lock_guard lock(deques_[lane].mu);
             deques_[lane].q.push_back(id);
         }
-        epoch_.fetch_add(1, std::memory_order_release);
+        {
+            std::lock_guard lock(wake_mu_);
+            epoch_.fetch_add(1, std::memory_order_release);
+        }
         wake_cv_.notify_all();
     }
 
@@ -200,6 +203,9 @@ private:
                 std::lock_guard lock(done_mu_);
                 done_cv_.notify_all();  // release the submitter
             }
+            {
+                std::lock_guard lock(wake_mu_);  // synchronize with inner wait
+            }
             wake_cv_.notify_all();  // and any workers parked in the epoch wait
         }
     }
@@ -231,7 +237,10 @@ private:
                     run_node(lane, id);
                 } else {
                     std::unique_lock lock(wake_mu_);
-                    wake_cv_.wait(lock, [this, seen] {
+                    // wait_for: 2ms ceiling prevents permanent stalls if a
+                    // notify slips past under heavy instrumentation (ASan).
+                    wake_cv_.wait_for(lock, std::chrono::milliseconds(2),
+                                      [this, seen] {
                         return stop_ ||
                                epoch_.load(std::memory_order_acquire) != seen ||
                                remaining_.load(std::memory_order_acquire) == 0;
