@@ -51,8 +51,9 @@ jobs:
           clang++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
             -I. test/test_runtime.cpp build/cargo/release/libaegis_rust.a -lpthread -ldl -lm \
             -o /tmp/san_runtime
-          AEGIS_REQUIRE_NETWORK_TEST=1 \
-            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 /tmp/san_runtime
+          env AEGIS_REQUIRE_NETWORK_TEST=1 \
+              UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+              timeout 30s /tmp/san_runtime
 
   lint:
     runs-on: ubuntu-latest
