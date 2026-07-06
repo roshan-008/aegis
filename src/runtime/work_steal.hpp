@@ -148,10 +148,7 @@ private:
             std::lock_guard lock(deques_[lane].mu);
             deques_[lane].q.push_back(id);
         }
-        {
-            std::lock_guard lock(wake_mu_);
-            epoch_.fetch_add(1, std::memory_order_release);
-        }
+        epoch_.fetch_add(1, std::memory_order_release);
         wake_cv_.notify_all();
     }
 
@@ -202,9 +199,6 @@ private:
             {
                 std::lock_guard lock(done_mu_);
                 done_cv_.notify_all();  // release the submitter
-            }
-            {
-                std::lock_guard lock(wake_mu_);  // synchronize with inner wait
             }
             wake_cv_.notify_all();  // and any workers parked in the epoch wait
         }
